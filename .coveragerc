@@ -1,0 +1,3 @@
+[run]
+omit =
+    src/scholar_agent/_version.py
