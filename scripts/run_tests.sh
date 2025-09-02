@@ -5,7 +5,7 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BASE_DIR"
 
 fail_under=${FAIL_UNDER:-"100"}
-PYTHONPATH="${BASE_DIR}:$PYTHONPATH" python3 -m pytest \
+uv run pytest \
     --cov-config=.coveragerc \
     --cov=src/scholar_agent \
     --cov-report=term \
