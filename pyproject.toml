@@ -1,0 +1,39 @@
+[project]
+name = "scholar-agent"
+description = "A scholarly research assistant with document ingestion, summarization, and interactive chat"
+authors = [{name = "Your Name", email = "you@example.com"}]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dynamic = ["version"]
+
+## dependencies ################################################################
+
+dependencies = [
+    "alchemy-logging>=0.3.0",
+    "alchemy-config>=0.6.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Extra dependencies for development
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+    "ruff>=0.12.11",
+    "pre-commit>=4.3.0",
+]
+
+## build #######################################################################
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+
+[tool.setuptools_scm]
+version_file = "src/scholar_agent/_version.py"
+version_scheme = "post-release"   # e.g. v1.2.3 → 1.2.3
+local_scheme  = "dirty-tag"       # optional
