@@ -112,18 +112,26 @@ class ImportableFactory(Factory):
         import_class_val = instance_config.get(self.__class__.IMPORT_CLASS_KEY)
         if import_class_val:
             if not isinstance(import_class_val, str):
-                raise TypeError(f"Value of {self.__class__.IMPORT_CLASS_KEY} must be a string")
+                raise TypeError(
+                    f"Value of {self.__class__.IMPORT_CLASS_KEY} must be a string"
+                )
             module_name, class_name = import_class_val.rsplit(".", 1)
             try:
                 imported_module = importlib.import_module(module_name)
             except ImportError as err:
-                raise ImportError(f"Invalid {self.__class__.IMPORT_CLASS_KEY}: Module cannot be imported [{module_name}]") from err
+                raise ImportError(
+                    f"Invalid {self.__class__.IMPORT_CLASS_KEY}: Module cannot be imported [{module_name}]"
+                ) from err
             try:
                 imported_class = getattr(imported_module, class_name)
             except AttributeError as err:
-                raise ImportError(f"Invalid {self.__class__.IMPORT_CLASS_KEY}: No such class [{class_name}] on module [{module_name}]") from err
+                raise ImportError(
+                    f"Invalid {self.__class__.IMPORT_CLASS_KEY}: No such class [{class_name}] on module [{module_name}]"
+                ) from err
             if not issubclass(imported_class, FactoryConstructible):
-                raise TypeError(f"Imported class {class_name} is not a subclass of FactoryConstructible")
+                raise TypeError(
+                    f"Imported class {class_name} is not a subclass of FactoryConstructible"
+                )
 
             self.register(imported_class)
         return super().construct(instance_config, instance_name)
