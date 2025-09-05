@@ -1,0 +1,18 @@
+# NOTE: Intentionally match Claude Desktop schema
+mcpServers:
+  docling:
+    command: uvx
+    args:
+      - --from
+      - docling-mcp@1.2.0
+      - docling-mcp-server
+    env:
+      UV_PYTHON: "3.12"
+    kwargs:
+      connect_timeout: 120
+
+tool_sets:
+  doc_conversion:
+    - convert-document-into-docling-document
+    - export-docling-document-to-markdown
+    - is-document-in-local-cache

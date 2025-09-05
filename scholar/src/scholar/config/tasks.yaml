@@ -1,0 +1,19 @@
+convert_document_task:
+  description: >
+    Convert a given document to markdown using available tools
+  expected_output: >
+    A markdown representation of a document
+  agent: document_parser
+
+find_background_topics_task:
+  description: >
+    Review the content of an article and identify the key topics of background
+    knowledge that a reader would need to understand in order to understand the
+    article.
+  expected_output: >
+    A JSON list of objects, each containing the field "topic" with a string
+    description of the topic, the field "passages" with a list of strings where
+    the topic is referenced, and the field "citations" with a list of strings
+    representing existing citations from the article that relate to the given
+    topic.
+  agent: research_citation_reviewer
