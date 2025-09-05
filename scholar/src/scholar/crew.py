@@ -29,8 +29,8 @@ class Scholar:
 
     def __init__(self, *_, **__):
         """Override to also load mcp server configurations"""
-        mcp_config_path = self.base_directory / "config" / "mcp.yaml"
-        self.mcp_config = self.load_yaml(mcp_config_path)
+        tools_config_path = self.base_directory / "config" / "tools.yaml"
+        self.tools_config = self.load_yaml(tools_config_path)
 
     def __del__(self):
         if self.server_adapter:
@@ -66,7 +66,7 @@ class Scholar:
         if self.server_adapter is None:
             adapter_configs = [
                 self._parse_mcp_config(cfg)
-                for cfg in self.mcp_config.get("mcpServers", {}).values()
+                for cfg in self.tools_config.get("mcpServers", {}).values()
             ]
             self.server_adapter = MultiMCPServerAdapter(*adapter_configs)
 

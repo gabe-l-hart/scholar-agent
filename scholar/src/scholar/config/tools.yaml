@@ -11,7 +11,7 @@ mcpServers:
     kwargs:
       connect_timeout: 120
 
-tool_sets:
+toolsets:
   doc_conversion:
     - convert-document-into-docling-document
     - export-docling-document-to-markdown
