@@ -1,11 +1,13 @@
 # Standard
-from typing import List
+from typing import List, cast
 import os
 
 # Third Party
 from crewai import Agent, Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
+from crewai_tools import ArxivPaperTool
+from crewai_tools.adapters.tool_collection import ToolCollection
 from mcp import StdioServerParameters
 
 from scholar.tools.multi_mcp_adapter import (
@@ -26,11 +28,12 @@ class Scholar:
     tasks: List[Task]
 
     server_adapter: MultiMCPServerAdapter | None = None
+    tool_sets: dict[str, ToolCollection] | None = None
 
     def __init__(self, *_, **__):
         """Override to also load mcp server configurations"""
-        tools_config_path = self.base_directory / "config" / "tools.yaml"
-        self.tools_config = self.load_yaml(tools_config_path)
+        mcp_config_path = self.base_directory / "config" / "mcp.yaml"
+        self.mcp_config = self.load_yaml(mcp_config_path)
 
     def __del__(self):
         if self.server_adapter:
@@ -66,9 +69,15 @@ class Scholar:
         if self.server_adapter is None:
             adapter_configs = [
                 self._parse_mcp_config(cfg)
-                for cfg in self.tools_config.get("mcpServers", {}).values()
+                for cfg in self.mcp_config.get("mcpServers", {}).values()
             ]
             self.server_adapter = MultiMCPServerAdapter(*adapter_configs)
+            self.tool_sets = {
+                ts_name: self.server_adapter.tools.filter_by_names(
+                    [n.replace("-", "_") for n in ts_names]
+                )
+                for ts_name, ts_names in self.mcp_config.get("toolsets", {}).items()
+            }
 
     # Learn more about YAML configuration files here:
     # Agents: https://docs.crewai.com/concepts/agents#yaml-configuration-recommended
@@ -79,9 +88,15 @@ class Scholar:
     @agent
     def document_parser(self) -> Agent:
         self._init_mcp()
+        arxiv_tool = ArxivPaperTool(
+            download_pdfs=True,
+            save_dir="./arxiv_pdfs",
+            use_title_as_filename=True,
+        )
         return Agent(
             config=self.agents_config["document_parser"],  # type: ignore[index]
             verbose=True,
+            tools=cast(dict, self.tool_sets)["doc_conversion"] + [arxiv_tool],
         )
 
     @agent
