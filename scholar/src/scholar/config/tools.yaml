@@ -11,8 +11,18 @@ mcpServers:
     kwargs:
       connect_timeout: 120
 
+  arxiv:
+    command: uvx
+    args:
+      - arxiv-mcp-server
+      - --storage-path
+      # TODO: Make this configurable?
+      - ./paper_storage
+
 toolsets:
   doc_conversion:
     - convert-document-into-docling-document
     - export-docling-document-to-markdown
     - is-document-in-local-cache
+  research:
+    - search-papers

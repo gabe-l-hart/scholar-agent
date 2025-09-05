@@ -6,7 +6,6 @@ import os
 from crewai import Agent, Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
-from crewai_tools import ArxivPaperTool
 from crewai_tools.adapters.tool_collection import ToolCollection
 from mcp import StdioServerParameters
 
@@ -32,8 +31,8 @@ class Scholar:
 
     def __init__(self, *_, **__):
         """Override to also load mcp server configurations"""
-        mcp_config_path = self.base_directory / "config" / "mcp.yaml"
-        self.mcp_config = self.load_yaml(mcp_config_path)
+        tools_config_path = self.base_directory / "config" / "tools.yaml"
+        self.tools_config = self.load_yaml(tools_config_path)
 
     def __del__(self):
         if self.server_adapter:
@@ -69,35 +68,28 @@ class Scholar:
         if self.server_adapter is None:
             adapter_configs = [
                 self._parse_mcp_config(cfg)
-                for cfg in self.mcp_config.get("mcpServers", {}).values()
+                for cfg in self.tools_config.get("mcpServers", {}).values()
             ]
             self.server_adapter = MultiMCPServerAdapter(*adapter_configs)
             self.tool_sets = {
                 ts_name: self.server_adapter.tools.filter_by_names(
                     [n.replace("-", "_") for n in ts_names]
                 )
-                for ts_name, ts_names in self.mcp_config.get("toolsets", {}).items()
+                for ts_name, ts_names in self.tools_config.get("toolsets", {}).items()
             }
 
-    # Learn more about YAML configuration files here:
-    # Agents: https://docs.crewai.com/concepts/agents#yaml-configuration-recommended
-    # Tasks: https://docs.crewai.com/concepts/tasks#yaml-configuration-recommended
+    ## Agents ##
 
     # If you would like to add tools to your agents, you can learn more about it here:
     # https://docs.crewai.com/concepts/agents#agent-tools
     @agent
-    def document_parser(self) -> Agent:
+    def background_researcher(self) -> Agent:
         self._init_mcp()
-        arxiv_tool = ArxivPaperTool(
-            download_pdfs=True,
-            save_dir="./arxiv_pdfs",
-            use_title_as_filename=True,
-        )
-        return Agent(
-            config=self.agents_config["document_parser"],  # type: ignore[index]
-            verbose=True,
-            tools=cast(dict, self.tool_sets)["doc_conversion"] + [arxiv_tool],
-        )
+        cfg = self.agents_config["background_researcher"]
+        tools = []
+        for toolset in cfg.pop("toolsets", []):
+            tools.extend(cast(dict, self.tool_sets)[toolset])
+        return Agent(config=cfg, verbose=True, tools=tools)
 
     @agent
     def research_citation_reviewer(self) -> Agent:
@@ -107,9 +99,14 @@ class Scholar:
             verbose=True,
         )
 
-    # To learn more about structured task outputs,
-    # task dependencies, and task callbacks, check out the documentation:
-    # https://docs.crewai.com/concepts/tasks#overview-of-a-task
+    ## Tasks ##
+
+    @task
+    def conduct_article_search(self) -> Task:
+        return Task(
+            config=self.tasks_config["conduct_article_search"],  # type: ignore[index]
+        )
+
     @task
     def convert_document_task(self) -> Task:
         return Task(

@@ -3,7 +3,15 @@ convert_document_task:
     Convert a given document to markdown using available tools
   expected_output: >
     A markdown representation of a document
-  agent: document_parser
+  agent: background_researcher
+
+conduct_article_search:
+  description: >
+    Search for articles and papers related to a given topic
+  expected_output: >
+    A list of paths or links to articles and papers related to a given topic,
+    sorted by relevance
+  agent: background_researcher
 
 find_background_topics_task:
   description: >
