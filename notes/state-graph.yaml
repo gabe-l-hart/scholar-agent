@@ -1,0 +1,61 @@
+tools:
+  - name: web_search
+  - name: arxiv_search
+  - name: knowledge_lookup
+  - name: knowledge_store
+  - name: doc_conversion
+
+tool_bundles:
+  - name: content_search
+    tools:
+      - web_search
+      - arxiv_search
+
+states:
+  - name: prompt_processing
+    description: You have been given a user prompt and need to understand the next action to take
+    tools:
+      - content_search
+      - knowledge_lookup
+    outbound_states:
+      - name: doc_ingestion
+        condition: Select doc_ingestion when the result of prompt_processing is to fetch a new document
+      - name: doc_loading
+        condition: Select doc_loading when the result of prompt_processing is to fetch an existing document
+      - name: prompt_processing
+        condition: Select prompt_processing if the user's prompt does not naturally lead to finding or loading a document
+
+  - name: doc_ingestion
+    description: Ingest knowledge from a new document.
+    tools:
+      - doc_conversion
+      - ...
+    outbound_states:
+      - name: doc_loading
+
+  - name: doc_loading
+    description: Load knowledge about a given document into the current session, including metadata and key upstream topics
+    tools:
+      - ...
+    outbound_states:
+      - name: docs_conversation
+
+  - name: docs_conversation
+    description: Discuss and analyze open documents
+    outbound_states:
+      - name: background_research
+        condition: Select background_research when the user asks a question about an identified upstream topic
+      - name: knowledge_summarization
+        condition: Select knowledge_summarization when the user asks a general question
+      - name: document_answer
+        condition: Select document_answer when the user asks a specific question that may be grounded in the open documents
+      - name: doc_conversation
+        condition: Select document_search when the user's prompt is off topic
+      - name: knowledge_store
+        condition: Save cited knowledge for later
+
+  - name: background_research
+
+  - name: knowledge_summarization
+
+  - name: document_answer

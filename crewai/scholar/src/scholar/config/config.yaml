@@ -12,6 +12,10 @@ agents:
       You are responsible for fetching the most up-to-date articles and papers on
       a given topic. You do this by searching for articles and papers using your
       available tools.
+
+      NOTES:
+      - If a tool requires an arxiv ID and a full URL is given, make sure to
+        strip the arxiv ID from the URL.
     toolsets:
       - research
 

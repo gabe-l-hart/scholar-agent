@@ -1,0 +1,3 @@
+ingestion:
+  # List of FactoryConstructible ingestors to create
+  ingestors: []

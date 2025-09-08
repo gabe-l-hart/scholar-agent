@@ -14,6 +14,7 @@ dependencies = [
     "alchemy-config>=0.6.0",
     "fastapi>=0.116.1",
     "uvicorn>=0.35.0",
+    "crewai>=0.175.0",
 ]
 
 [build-system]

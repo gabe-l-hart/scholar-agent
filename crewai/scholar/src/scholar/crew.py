@@ -2,17 +2,17 @@
 from typing import List, cast
 import os
 
-# Third Party
-from crewai import Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, crew
 from crewai_tools.adapters.tool_collection import ToolCollection
 from mcp import StdioServerParameters
-
 from scholar.tools.multi_mcp_adapter import (
     MCPServerAdapterConfig,
     MultiMCPServerAdapter,
 )
+
+# Third Party
+from crewai import Crew, Process, Task
 
 
 @CrewBase
@@ -98,6 +98,9 @@ class Scholar:
             process=Process.sequential,
             verbose=self.verbose,
             output_log_file=self.output_log_file,
+            # DEBUG
+            # planning=True,
+            # planning_llm="ollama/PRIVATE/granite4-prerelease:tiny-r250825a-Q4_K_M-128k",
         )
 
         # Connect tools to agents
