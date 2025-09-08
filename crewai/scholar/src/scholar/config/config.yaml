@@ -1,0 +1,120 @@
+# Agents
+#
+# Agents follow standard CrewAI config with the addition of the `toolsets` key
+# in the schema. This will be matched to the toolsets in `tools` to connect the
+# available tools to the agent after instantiation.
+agents:
+  # Background Researcher
+  - role: background_researcher
+    goal: >
+      Find and fetch the most relevant papers or articles on a given topic
+    backstory: >
+      You are responsible for fetching the most up-to-date articles and papers on
+      a given topic. You do this by searching for articles and papers using your
+      available tools.
+
+      NOTES:
+      - If a tool requires an arxiv ID and a full URL is given, make sure to
+        strip the arxiv ID from the URL.
+    toolsets:
+      - research
+
+  # Article reader
+  - role: article_reader
+    goal: >
+      Convert and read a given paper
+    backstory: >
+      You are responsible for converting a given document into a legible format
+      and reading its contents into the conversation for further analysis.
+    toolsets:
+      - doc_conversion
+
+  # Article assistant
+  - role: article_assistant
+    goal: >
+      You take the contents of an article and help a reader make sense of it
+    backstory: >
+      Your goal is to help a reader understand a given article. You do this by
+      deeply analyzing the contents of the article, summarizing it, and
+      identifying key topics that the user would need to understand in order to
+      understand the article fully that are not already explained in the
+      article.
+
+# Tasks
+tasks:
+  # Article Search
+  - name: article_search
+    description: >
+      Search for articles and papers related to a given topic if needed
+    expected_output: >
+      If a research topic is given, return a list of paths or links to articles
+      and papers related to a given topic, sorted by relevance. If an article is
+      already found, no action is needed.
+    agent: background_researcher
+
+  # Convert Document
+  - name: convert_document
+    description: >
+      Convert a given document to markdown using available tools
+    expected_output: >
+      A markdown representation of a document
+    agent: article_reader
+
+  # Find Background Topics
+  - name: present_article
+    description: >
+      Review the content of an article and identify the key topics of background
+      knowledge that a reader would need to understand in order to understand the
+      article that are not already described in the paper.
+    expected_output: >
+      A markdown representation with the following sections:
+
+      ## Metadata
+      - Title: <TITLE>
+      - Authors: <LIST OF AUTHORS>
+      - Author Affiliations: <LIST OF AUTHOR AFFILIATIONS>
+      - Date: <PUBLICATION DATE>
+
+      ## Summary
+      A prose summary of the article's key thesis and novelty.
+
+      ## Background Topics
+      A list of topics that are not described in the article itself that a
+      reader would need to already be familiar with in order to understand the
+      article in depth. This list should be markdown formatted. For each topic,
+      one or more passages from the article should be listed where the given
+      topic is required. If the article includes a citations section, any cited
+      works related to the topic should also be listed.
+
+    agent: article_assistant
+
+# Tools
+tools:
+  # NOTE: Intentionally match Claude Desktop schema
+  mcpServers:
+    docling:
+      command: uvx
+      args:
+        - --from
+        - docling-mcp@1.2.0
+        - docling-mcp-server
+      env:
+        UV_PYTHON: "3.12"
+      kwargs:
+        connect_timeout: 120
+
+    arxiv:
+      command: uvx
+      args:
+        - arxiv-mcp-server
+        - --storage-path
+        # TODO: Make this configurable?
+        - ./paper_storage
+
+  toolsets:
+    doc_conversion:
+      - convert-document-into-docling-document
+      - export-docling-document-to-markdown
+      - is-document-in-local-cache
+    research:
+      - search-papers

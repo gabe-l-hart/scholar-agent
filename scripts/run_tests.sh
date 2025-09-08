@@ -7,7 +7,7 @@ cd "$BASE_DIR"
 fail_under=${FAIL_UNDER:-"100"}
 uv run pytest \
     --cov-config=.coveragerc \
-    --cov=src/scholar_agent \
+    --cov=rigid/src/scholar_agent \
     --cov-report=term \
     --cov-report=html \
     --cov-fail-under=$fail_under \
