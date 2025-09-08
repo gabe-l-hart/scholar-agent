@@ -35,6 +35,9 @@ class Scholar:
         self.verbose = os.environ.get("VERBOSE", "") == 1 or self.config.get(
             "verbose", False
         )
+        self.output_log_file: str | None = os.environ.get(
+            "LOG_FILE", self.config.get("output_log_file")
+        )
         for agent_config in self.config.get("agents", []):
             agent_config["verbose"] = self.verbose
 
@@ -91,7 +94,10 @@ class Scholar:
 
         # Instantiate the crew
         crew = Crew(
-            config=self.config, process=Process.sequential, verbose=self.verbose
+            config=self.config,
+            process=Process.sequential,
+            verbose=self.verbose,
+            output_log_file=self.output_log_file,
         )
 
         # Connect tools to agents
