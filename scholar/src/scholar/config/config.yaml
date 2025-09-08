@@ -11,56 +11,78 @@ agents:
     backstory: >
       You are responsible for fetching the most up-to-date articles and papers on
       a given topic. You do this by searching for articles and papers using your
-      available tools and converting them to markdown for easy reading.
+      available tools.
     toolsets:
-      - doc_conversion
       - research
 
-  # Research Citation Reviewer
-  # research_citation_reviewer
-  - role: research_citation_reviewer
+  # Article reader
+  - role: article_reader
     goal: >
-      Find all background topics a reader needs to understand in order to make
-      sense of the content of an article
+      Convert and read a given paper
     backstory: >
-      Your goal is to
+      You are responsible for converting a given document into a legible format
+      and reading its contents into the conversation for further analysis.
+    toolsets:
+      - doc_conversion
 
-      Given the text of a paper or article, you break down the key topics that a
-      reader would need to know ahead of time in order to read the content of the
-      article and understand it. You then cross-reference these topics with any
-      citations available in the article to find additional source material for a
-      reader to look into in order to gain the necessary background information.
-      If you find a background topic with no citations, you flag that as well.
+  # Article assistant
+  - role: article_assistant
+    goal: >
+      You take the contents of an article and help a reader make sense of it
+    backstory: >
+      Your goal is to help a reader understand a given article. You do this by
+      deeply analyzing the contents of the article, summarizing it, and
+      identifying key topics that the user would need to understand in order to
+      understand the article fully that are not already explained in the
+      article.
 
 # Tasks
 tasks:
+  # Article Search
+  - name: article_search
+    description: >
+      Search for articles and papers related to a given topic if needed
+    expected_output: >
+      If a research topic is given, return a list of paths or links to articles
+      and papers related to a given topic, sorted by relevance. If an article is
+      already found, no action is needed.
+    agent: background_researcher
+
   # Convert Document
-  - description: >
+  - name: convert_document
+    description: >
       Convert a given document to markdown using available tools
     expected_output: >
       A markdown representation of a document
-    agent: background_researcher
-
-  # Conduct Article Search
-  - description: >
-      Search for articles and papers related to a given topic
-    expected_output: >
-      A list of paths or links to articles and papers related to a given topic,
-      sorted by relevance
-    agent: background_researcher
+    agent: article_reader
 
   # Find Background Topics
-  - description: >
+  - name: present_article
+    description: >
       Review the content of an article and identify the key topics of background
       knowledge that a reader would need to understand in order to understand the
-      article.
+      article that are not already described in the paper.
     expected_output: >
-      A JSON list of objects, each containing the field "topic" with a string
-      description of the topic, the field "passages" with a list of strings where
-      the topic is referenced, and the field "citations" with a list of strings
-      representing existing citations from the article that relate to the given
-      topic.
-    agent: research_citation_reviewer
+      A markdown representation with the following sections:
+
+      ## Metadata
+      - Title: <TITLE>
+      - Authors: <LIST OF AUTHORS>
+      - Author Affiliations: <LIST OF AUTHOR AFFILIATIONS>
+      - Date: <PUBLICATION DATE>
+
+      ## Summary
+      A prose summary of the article's key thesis and novelty.
+
+      ## Background Topics
+      A list of topics that are not described in the article itself that a
+      reader would need to already be familiar with in order to understand the
+      article in depth. This list should be markdown formatted. For each topic,
+      one or more passages from the article should be listed where the given
+      topic is required. If the article includes a citations section, any cited
+      works related to the topic should also be listed.
+
+    agent: article_assistant
 
 # Tools
 tools:
