@@ -3,9 +3,9 @@ from typing import List, cast
 import os
 
 # Third Party
-from crewai import Agent, Crew, Process, Task
+from crewai import Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
-from crewai.project import CrewBase, agent, crew, task
+from crewai.project import CrewBase, crew
 from crewai_tools.adapters.tool_collection import ToolCollection
 from mcp import StdioServerParameters
 
@@ -13,10 +13,6 @@ from scholar.tools.multi_mcp_adapter import (
     MCPServerAdapterConfig,
     MultiMCPServerAdapter,
 )
-
-# If you want to run a snippet of code before or after the crew starts,
-# you can use the @before_kickoff and @after_kickoff decorators
-# https://docs.crewai.com/concepts/crews#example-crew-class-with-decorators
 
 
 @CrewBase
@@ -29,10 +25,18 @@ class Scholar:
     server_adapter: MultiMCPServerAdapter | None = None
     tool_sets: dict[str, ToolCollection] | None = None
 
+    verbose: bool = False
+
     def __init__(self, *_, **__):
         """Override to also load mcp server configurations"""
-        tools_config_path = self.base_directory / "config" / "tools.yaml"
-        self.tools_config = self.load_yaml(tools_config_path)
+        config_path = self.base_directory / "config" / "config.yaml"
+        self.config = self.load_yaml(config_path)
+        self.tools_config = self.config.get("tools", {})
+        self.verbose = os.environ.get("VERBOSE", "") == 1 or self.config.get(
+            "verbose", False
+        )
+        for agent_config in self.config.get("agents", []):
+            agent_config["verbose"] = self.verbose
 
     def __del__(self):
         if self.server_adapter:
@@ -78,58 +82,26 @@ class Scholar:
                 for ts_name, ts_names in self.tools_config.get("toolsets", {}).items()
             }
 
-    ## Agents ##
-
-    # If you would like to add tools to your agents, you can learn more about it here:
-    # https://docs.crewai.com/concepts/agents#agent-tools
-    @agent
-    def background_researcher(self) -> Agent:
-        self._init_mcp()
-        cfg = self.agents_config["background_researcher"]
-        tools = []
-        for toolset in cfg.pop("toolsets", []):
-            tools.extend(cast(dict, self.tool_sets)[toolset])
-        return Agent(config=cfg, verbose=True, tools=tools)
-
-    @agent
-    def research_citation_reviewer(self) -> Agent:
-        self._init_mcp()
-        return Agent(
-            config=self.agents_config["research_citation_reviewer"],  # type: ignore[index]
-            verbose=True,
-        )
-
-    ## Tasks ##
-
-    @task
-    def conduct_article_search(self) -> Task:
-        return Task(
-            config=self.tasks_config["conduct_article_search"],  # type: ignore[index]
-        )
-
-    @task
-    def convert_document_task(self) -> Task:
-        return Task(
-            config=self.tasks_config["convert_document_task"],  # type: ignore[index]
-        )
-
-    @task
-    def find_background_topics_task(self) -> Task:
-        return Task(
-            config=self.tasks_config["find_background_topics_task"],  # type: ignore[index]
-        )
-
     @crew
     def crew(self) -> Crew:
         """Creates the Scholar crew"""
-        # To learn how to add knowledge sources to your crew, check out the documentation:
-        # https://docs.crewai.com/concepts/knowledge#what-is-knowledge
 
-        return Crew(
-            agents=self.agents,  # Automatically created by the @agent decorator
-            tasks=self.tasks,  # Automatically created by the @task decorator
-            process=Process.sequential,
-            verbose=True,
-            # output_log_file="logs.json",
-            # process=Process.hierarchical, # In case you wanna use that instead https://docs.crewai.com/how-to/Hierarchical/
+        # Initialize tools
+        self._init_mcp()
+
+        # Instantiate the crew
+        crew = Crew(
+            config=self.config, process=Process.sequential, verbose=self.verbose
         )
+
+        # Connect tools to agents
+        agents_config = {a["role"]: a for a in self.config.get("agents")}
+        for agent in crew.agents:
+            for toolset_name in agents_config.get(agent.role, {}).get("toolsets", []):
+                toolset = cast(dict, self.tool_sets).get(toolset_name)
+                assert (
+                    toolset is not None
+                ), f"Unkown toolset for {agent.role}: {toolset}"
+                cast(BaseAgent, agent).tools.extend(cast(ToolCollection, toolset))
+
+        return crew
