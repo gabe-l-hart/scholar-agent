@@ -5,6 +5,7 @@ multiple MCP servers as a single logical server.
 """
 
 # Standard
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import os
 import re
@@ -41,19 +42,27 @@ class MultiMCPServerAdapter:
         self._all_tools = []
         self.start()
 
+    @contextmanager
     def _maybe_isolate(self, isolate: bool):
         if isolate:
             workdir = tempfile.TemporaryDirectory()
             path = workdir.__enter__()
             self._contexts.append(workdir)
+            cwd = os.getcwd()
             os.chdir(path)
+            yield
+            os.chdir(cwd)
+        else:
+            yield
 
     def _enter_adapter(self, adapter_config: MCPServerAdapterConfig):
-        self._maybe_isolate(adapter_config.isolate)
-        adapter = MCPServerAdapter(adapter_config.serverparams, **adapter_config.kwargs)
-        adapter.__enter__()
-        self._contexts.append(adapter)
-        self._all_tools.append(adapter.tools)
+        with self._maybe_isolate(adapter_config.isolate):
+            adapter = MCPServerAdapter(
+                adapter_config.serverparams, **adapter_config.kwargs
+            )
+            adapter.__enter__()
+            self._contexts.append(adapter)
+            self._all_tools.append(adapter.tools)
 
     def _tool_predicate(self, tool: BaseTool) -> bool:
         return not self._tool_filters or any(
@@ -80,7 +89,6 @@ class MultiMCPServerAdapter:
 
     def __enter__(self) -> ToolCollection[BaseTool]:
         for cfg in self._adapter_configs:
-            self._maybe_isolate(cfg.isolate)
             self._enter_adapter(cfg)
         return self.tools
 
