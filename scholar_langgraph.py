@@ -82,24 +82,28 @@ Your role is to:
 
 Current workflow logic:
 - If no current article exists and user provides URL/arxiv ID -> delegate to document_ingestion
+- If document_ingestion responds without actually ingesting the document -> delegate to document_ingestion
 - If document exists but not analyzed -> delegate to article_analyzer
 - If user asks about background topics -> delegate to background_researcher
 - If user asks general questions -> use current context to respond directly
 - If user provides search terms without specific article -> delegate to background_researcher first
 
 Always respond with JSON indicating the next agent or END:
-{"next_agent": "document_ingestion|article_analyzer|background_researcher|END", "reasoning": "brief explanation"}
+{"next_agent": "<AGENT_NAME>", "reasoning": "brief explanation"} where AGENT_NAME is one of document_ingestion, article_analyzer, background_researcher, or END
 """
 
 document_ingestion_prompt = """
 You are a document ingestion specialist. Your job is to:
 1. Fetch documents from URLs or arxiv IDs using available tools
-2. Convert documents to markdown format
-3. Return the markdown content to the supervisor
+2. Return the document_id for the ingested document to the supervisor
 
-Tools available: convert_document_into_docling_document, export_docling_document_to_markdown, is_document_in_local_cache
+Tools available: convert_document_into_docling_document, is_document_in_local_cache
 
 Always route back to supervisor after completing ingestion.
+
+**NOTE**: If provided with an arxiv ID, make sure to get the full pdf, not just the abstract. For example if the ID is 1234.56789, use the URL https://arxiv.org/pdf/1234.56789 not https://arxiv.org/abs/1234.56789.
+
+**NOTE**: You should NEVER present document content, only the ID of the ingested document
 """
 
 article_analyzer_prompt = """
@@ -201,7 +205,6 @@ def create_document_ingestion_agent(model, tools):
         if t.name
         in [
             "convert_document_into_docling_document",
-            "export_docling_document_to_markdown",
             "is_document_in_local_cache",
         ]
     ]
@@ -245,13 +248,19 @@ def create_document_ingestion_agent(model, tools):
     return ingestion_node
 
 
-def create_article_analyzer_agent(model):
+def create_article_analyzer_agent(model, tools):
+    analyzer_tools = [
+        t for t in tools if t.name in ["export_docling_document_to_markdown"]
+    ]
+
     def analyzer_node(state: ScholarState):
         messages = state["messages"]
         current_doc = state.get("current_document")
 
         if not current_doc or not current_doc.get("content"):
             response = AIMessage("No document available for analysis")
+            # DEBUG
+            breakpoint()
         else:
             document_content = current_doc.get("content", "")
             # Truncate very long documents for analysis
@@ -300,7 +309,7 @@ def create_background_researcher_agent(model, tools):
 def create_scholar_workflow(model, tools):
     supervisor_agent = create_supervisor_agent(model)
     document_ingestion_agent = create_document_ingestion_agent(model, tools)
-    article_analyzer_agent = create_article_analyzer_agent(model)
+    article_analyzer_agent = create_article_analyzer_agent(model, tools)
     background_researcher_agent = create_background_researcher_agent(model, tools)
 
     def route_after_supervisor(state: ScholarState):
@@ -431,12 +440,23 @@ async def main():
                         for node_name, node_output in step.items():
                             if node_name != "__end__":
                                 print(f"{magenta(f'[{node_name.upper()}]')}")
+                                response_color = (
+                                    yellow if node_name == "supervisor" else faint
+                                )
 
                                 if "messages" in node_output:
-                                    new_messages = node_output["messages"]
+                                    new_messages = [
+                                        m
+                                        for m in node_output["messages"]
+                                        if m not in state["messages"]
+                                    ]
                                     for msg in new_messages:
                                         if hasattr(msg, "content") and msg.content:
-                                            print(yellow(f"RESPONSE: {msg.content}"))
+                                            print(
+                                                response_color(
+                                                    f"RESPONSE: {msg.content}"
+                                                )
+                                            )
                                         elif (
                                             hasattr(msg, "tool_calls")
                                             and msg.tool_calls
