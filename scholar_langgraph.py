@@ -209,6 +209,8 @@ def create_document_ingestion_agent(model, tools):
 
     async def ingestion_node(state: ScholarState):
         messages = []
+        document_content = None
+
         async for resp in agent.astream(
             input={"messages": state["messages"]}, config={}
         ):
@@ -221,8 +223,24 @@ def create_document_ingestion_agent(model, tools):
 
             for msg in new_messages:
                 messages.append(msg)
+                # Check if this message contains document content
+                if hasattr(msg, "content") and msg.content and len(msg.content) > 1000:
+                    document_content = msg.content
 
-        return {"messages": state["messages"] + messages, "next_agent": "supervisor"}
+        # Store the document in the state if we found content
+        current_document = state.get("current_document", {})
+        if document_content:
+            current_document = {
+                "source": "URL provided by user",
+                "content": document_content,
+                "cache_id": "ingested",
+            }
+
+        return {
+            "messages": state["messages"] + messages,
+            "current_document": current_document,
+            "next_agent": "supervisor",
+        }
 
     return ingestion_node
 
@@ -232,10 +250,15 @@ def create_article_analyzer_agent(model):
         messages = state["messages"]
         current_doc = state.get("current_document")
 
-        if not current_doc:
+        if not current_doc or not current_doc.get("content"):
             response = AIMessage("No document available for analysis")
         else:
-            analysis_request = f"Analyze the current document: {current_doc}"
+            document_content = current_doc.get("content", "")
+            # Truncate very long documents for analysis
+            if len(document_content) > 8000:
+                document_content = document_content[:8000] + "... [truncated]"
+
+            analysis_request = f"Analyze this scholarly document and provide a summary of its novel points and background topics:\n\n{document_content}"
             response = model.invoke(
                 [
                     {"role": "system", "content": article_analyzer_prompt},
