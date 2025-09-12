@@ -8,26 +8,22 @@ from enum import Enum
 from typing import Any, Generator
 import argparse
 import asyncio
+import json
 import os
+import re
 import tempfile
 
 # Third Party
 from humanfriendly.terminal import ansi_wrap
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_ollama import ChatOllama
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from typing_extensions import TypedDict
 
-
-class ScholarState(TypedDict):
-    messages: list
-    current_document: dict | None
-    background_topics: list
-    next_agent: str | None
-
+## Prompts and Config ##########################################################
 
 mcp_config = {
     "docling": {
@@ -57,10 +53,6 @@ mcp_config = {
 }
 
 
-class ModelProvider(Enum):
-    OLLAMA = "ollama"
-
-
 tool_names = [
     "convert_document_into_docling_document",
     "export_docling_document_to_markdown",
@@ -83,7 +75,7 @@ Your role is to:
 Current workflow logic:
 - If no current article exists and user provides URL/arxiv ID -> delegate to document_ingestion
 - If document_ingestion responds without actually ingesting the document -> delegate to document_ingestion
-- If document exists but not analyzed -> delegate to article_analyzer
+- If document exists (has document_id) but not analyzed -> delegate to article_analyzer
 - If user asks about background topics -> delegate to background_researcher
 - If user asks general questions -> use current context to respond directly
 - If user provides search terms without specific article -> delegate to background_researcher first
@@ -103,7 +95,8 @@ Always route back to supervisor after completing ingestion.
 
 **NOTE**: If provided with an arxiv ID, make sure to get the full pdf, not just the abstract. For example if the ID is 1234.56789, use the URL https://arxiv.org/pdf/1234.56789 not https://arxiv.org/abs/1234.56789.
 
-**NOTE**: You should NEVER present document content, only the ID of the ingested document
+Always respond with JSON indicating the document_id based on the returned document_key from the tool. For example:
+{"document_id": "abcd1234"}
 """
 
 article_analyzer_prompt = """
@@ -131,6 +124,22 @@ Tools available: search_papers
 Focus on finding relevant academic sources and presenting clear summaries.
 Always route back to supervisor after completing research.
 """
+
+## Types #######################################################################
+
+
+class ModelProvider(Enum):
+    OLLAMA = "ollama"
+
+
+class ScholarState(TypedDict):
+    agent_messages: dict[str, list[dict]]
+    current_document: dict | None
+    background_topics: list
+    next_agent: str | None
+
+
+## Helpers #####################################################################
 
 
 @contextmanager
@@ -165,27 +174,27 @@ def faint(text: str) -> str:
     return ansi_wrap(text, faint=True)
 
 
+## Agents ######################################################################
+
+
 def create_supervisor_agent(model):
     def supervisor_node(state: ScholarState):
-        messages = state["messages"]
+        messages = state["agent_messages"].get("supervisor", [])
         current_doc = state.get("current_document")
         background_topics = state.get("background_topics", [])
 
+        document_info = "None"
+        if current_doc:
+            document_info = f"Document ID: {current_doc.get('document_id', 'unknown')}, Source: {current_doc.get('source', 'unknown')}"
+
         context = f"""
-Current document: {current_doc}
+Current document: {document_info}
 Background topics covered: {len(background_topics)}
 Recent messages: {messages[-3:] if len(messages) >= 3 else messages}
 """
 
-        response = model.invoke(
-            [
-                {"role": "system", "content": supervisor_prompt},
-                {"role": "user", "content": context},
-            ]
-        )
-
-        # Standard
-        import json
+        messages.append({"role": "user", "content": context})
+        response = model.invoke(messages)
 
         try:
             decision = json.loads(response.content)
@@ -212,10 +221,11 @@ def create_document_ingestion_agent(model, tools):
 
     async def ingestion_node(state: ScholarState):
         messages = []
-        document_content = None
+        document_id = None
 
         async for resp in agent.astream(
-            input={"messages": state["messages"]}, config={}
+            input={"messages": state["agent_messages"].get("document_ingestion", [])},
+            config={},
         ):
             if agent_response := resp.get("agent"):
                 new_messages = agent_response["messages"]
@@ -226,24 +236,40 @@ def create_document_ingestion_agent(model, tools):
 
             for msg in new_messages:
                 messages.append(msg)
-                # Check if this message contains document content
-                if hasattr(msg, "content") and msg.content and len(msg.content) > 1000:
-                    document_content = msg.content
+                # Look for document_id in the message content
+                if hasattr(msg, "content") and msg.content:
+                    # Extract document ID from tool responses or agent messages
+                    content = msg.content
+                    if "document_key" in content:
 
-        # Store the document in the state if we found content
+                        # Try parsing json first
+                        try:
+                            parsed = json.loads(content)
+                            document_id = parsed.get("document_key")
+                        except json.decoder.JSONDecodeError:
+                            pass
+                        if document_id is None:
+                            # Fall back to regex matching
+                            id_match = re.search(
+                                r'document_key["\s:]+([^"\s,}]+)',
+                                content,
+                                re.IGNORECASE,
+                            )
+                            if id_match:
+                                document_id = id_match.group(1)
+
+        # Store the document reference in the state
         current_document = state.get("current_document", {})
-        if document_content:
+        if document_id:
             current_document = {
                 "source": "URL provided by user",
-                "content": document_content,
-                "cache_id": "ingested",
+                "document_id": document_id,
             }
 
-        return {
-            "messages": state["messages"] + messages,
-            "current_document": current_document,
-            "next_agent": "supervisor",
-        }
+        state["agent_messages"]["document_ingestion"] = messages
+        state["current_document"] = current_document
+        state["next_agent"] = "supervisor"
+        return state
 
     return ingestion_node
 
@@ -252,30 +278,38 @@ def create_article_analyzer_agent(model, tools):
     analyzer_tools = [
         t for t in tools if t.name in ["export_docling_document_to_markdown"]
     ]
+    agent = create_react_agent(model, analyzer_tools, prompt=article_analyzer_prompt)
 
-    def analyzer_node(state: ScholarState):
-        messages = state["messages"]
+    async def analyzer_node(state: ScholarState):
+        messages = state["agent_messages"].get("article_analyzer", [])
         current_doc = state.get("current_document")
-
-        if not current_doc or not current_doc.get("content"):
+        if not current_doc or not current_doc.get("document_id"):
             response = AIMessage("No document available for analysis")
-            # DEBUG
-            breakpoint()
+            state["agent_messages"]["article_analyzer"] = messages + [response]
+            state["next_agent"] = "supervisor"
         else:
-            document_content = current_doc.get("content", "")
-            # Truncate very long documents for analysis
-            if len(document_content) > 8000:
-                document_content = document_content[:8000] + "... [truncated]"
+            document_id = current_doc.get("document_id")
 
-            analysis_request = f"Analyze this scholarly document and provide a summary of its novel points and background topics:\n\n{document_content}"
-            response = model.invoke(
-                [
-                    {"role": "system", "content": article_analyzer_prompt},
-                    {"role": "user", "content": analysis_request},
-                ]
-            )
+            # Create a message asking the agent to fetch and analyze the document
+            analysis_request = f"Use the export_docling_document_to_markdown tool to fetch the content for document_id: {document_id}, then analyze the document content to provide a summary of its novel points and background topics."
 
-        return {"messages": messages + [response], "next_agent": "supervisor"}
+            # Add the request to the messages and let the agent handle tool calls
+            messages.append(HumanMessage(content=analysis_request))
+
+            async for resp in agent.astream(input={"messages": messages}, config={}):
+                if agent_response := resp.get("agent"):
+                    new_messages = agent_response["messages"]
+                elif tool_response := resp.get("tools"):
+                    new_messages = tool_response["messages"]
+                else:
+                    continue
+
+                for msg in new_messages:
+                    messages.append(msg)
+
+            state["agent_messages"]["article_analyzer"] = messages
+            state["next_agent"] = "supervisor"
+        return state
 
     return analyzer_node
 
@@ -287,21 +321,20 @@ def create_background_researcher_agent(model, tools):
     )
 
     async def researcher_node(state: ScholarState):
-        messages = []
-        async for resp in agent.astream(
-            input={"messages": state["messages"]}, config={}
-        ):
+        messages = state["agent_messages"].get("background_researcher", [])
+        async for resp in agent.astream(input={"messages": messages}, config={}):
             if agent_response := resp.get("agent"):
                 new_messages = agent_response["messages"]
             elif tool_response := resp.get("tools"):
                 new_messages = tool_response["messages"]
             else:
                 continue
-
             for msg in new_messages:
                 messages.append(msg)
 
-        return {"messages": state["messages"] + messages, "next_agent": "supervisor"}
+        state["agent_messages"]["background_researcher"] = messages
+        state["next_agent"] = "supervisor"
+        return state
 
     return researcher_node
 
@@ -332,6 +365,9 @@ def create_scholar_workflow(model, tools):
     workflow.add_edge("background_researcher", "supervisor")
 
     return workflow.compile()
+
+
+## Main ########################################################################
 
 
 async def main():
@@ -405,12 +441,12 @@ async def main():
             tools = [tool for tool in tools if tool.name in tool_names]
             workflow = create_scholar_workflow(model, tools)
 
-            state = {
-                "messages": [],
-                "current_document": None,
-                "background_topics": [],
-                "next_agent": None,
-            }
+            state = ScholarState(
+                agent_messages={},
+                current_document=None,
+                background_topics=[],
+                next_agent=None,
+            )
 
             # Get pre-scripted prompts
             prompts = args.prompt or []
@@ -433,7 +469,13 @@ async def main():
                     if user_input == "exit":
                         break
 
-                state["messages"].append(HumanMessage(content=user_input))
+                # Initialize the supervisor with its system prompt and the user
+                # input
+                supervisor_messages = state["agent_messages"].setdefault(
+                    "supervisor", []
+                )
+                supervisor_messages.append(SystemMessage(content=supervisor_prompt))
+                supervisor_messages.append(HumanMessage(content=user_input))
 
                 try:
                     async for step in workflow.astream(state):
@@ -444,31 +486,29 @@ async def main():
                                     yellow if node_name == "supervisor" else faint
                                 )
 
-                                if "messages" in node_output:
-                                    new_messages = [
-                                        m
-                                        for m in node_output["messages"]
-                                        if m not in state["messages"]
-                                    ]
-                                    for msg in new_messages:
-                                        if hasattr(msg, "content") and msg.content:
-                                            print(
-                                                response_color(
-                                                    f"RESPONSE: {msg.content}"
-                                                )
-                                            )
-                                        elif (
-                                            hasattr(msg, "tool_calls")
-                                            and msg.tool_calls
-                                        ):
-                                            print(
-                                                magenta(f"TOOL CALL: {msg.tool_calls}")
-                                            )
+                                for msg in filter(
+                                    lambda m: m in state["agent_messages"][node_name],
+                                    node_output.get("agent_messages", {}).get(
+                                        node_name, []
+                                    ),
+                                ):
+                                    content = getattr(msg, "content", None)
+                                    tool_calls = getattr(msg, "tool_calls", None)
+                                    if tool_calls:
+                                        print(magenta(f"TOOL CALL: {msg.tool_calls}"))
+                                    if content:
+                                        print(response_color(f"RESPONSE: {content}"))
 
                                 state.update(node_output)
 
                 except Exception as e:
                     print(red(f"Error: {e}"))
+                    # Standard
+                    import traceback
+
+                    traceback.print_exc()
+                    # DEBUG
+                    breakpoint()
                     continue
 
 
