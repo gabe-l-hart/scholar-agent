@@ -2,17 +2,19 @@
 from typing import List, cast
 import os
 
+# Third Party
+from crewai import Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, crew
 from crewai_tools.adapters.tool_collection import ToolCollection
+from dotenv import load_dotenv
 from mcp import StdioServerParameters
 from scholar.tools.multi_mcp_adapter import (
     MCPServerAdapterConfig,
     MultiMCPServerAdapter,
 )
 
-# Third Party
-from crewai import Crew, Process, Task
+load_dotenv()
 
 
 @CrewBase
@@ -95,9 +97,13 @@ class Scholar:
         # Instantiate the crew
         crew = Crew(
             config=self.config,
-            process=Process.sequential,
+            process=Process.hierarchical,
+            manager_llm=os.getenv("MODEL"),
             verbose=self.verbose,
             output_log_file=self.output_log_file,
+            chat_llm=os.getenv("MODEL"),
+            planning_llm=os.getenv("MODEL"),
+            planning=True,
             # DEBUG
             # planning=True,
             # planning_llm="ollama/PRIVATE/granite4-prerelease:tiny-r250825a-Q4_K_M-128k",
@@ -107,7 +113,7 @@ class Scholar:
         agents_config = {a["role"]: a for a in self.config.get("agents")}
         for agent in crew.agents:
             for toolset_name in agents_config.get(agent.role, {}).get("toolsets", []):
-                toolset = cast(dict, self.tool_sets).get(toolset_name)
+                toolset = cast(dict, self.tool_sets or {}).get(toolset_name)
                 assert (
                     toolset is not None
                 ), f"Unkown toolset for {agent.role}: {toolset}"

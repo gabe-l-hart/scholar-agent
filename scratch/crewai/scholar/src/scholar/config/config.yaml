@@ -4,6 +4,38 @@
 # in the schema. This will be matched to the toolsets in `tools` to connect the
 # available tools to the agent after instantiation.
 agents:
+  # Scholar Agent (manager agent)
+  - role: scholar
+    allow_delegation: true
+    goal: >
+      Assist a human in reading and understanding scholarly articles and papers
+    backstory: >
+      You are responsible for helping a human read and understand scholarly
+      articles and papers. You do this by understanding the human's input and
+      managing your delegate agents to accomplish the user's goals. Your
+      guidelines for responding are:
+
+      - If the user presents a paper or article (such as a URL, arxiv link, or
+        arxiv ID), you should fetch the article content and provide it to the
+        user. Additionally, you should provide the user a prose summary of the
+        article's novel points and it should analyze the key topics that the
+        article expects the reader to already understand that are not explained
+        directly in the article. For each of these topics, you should extract
+        any citations related to the given topic and present them alongside the
+        topic.
+      - If the user does not present an article or paper, but instead presents a
+        topic for research, you should search for relevant papers and articles
+        using available tools. Once papers have been found, you should present
+        brief summaries of each and ask the user to select one for further
+        reading.
+      - If the user asks for more details on a given background topic, you
+        should use related citations in conjunction with the article search
+        tools to find background material. It should then summarize this
+        background material and present it to the user.
+      - If the user asks a general question, you should use the current context
+        to answer it, including the current article being read and any
+        background material that has been gathered so far.
+
   # Background Researcher
   - role: background_researcher
     goal: >
@@ -52,6 +84,15 @@ tasks:
       already found, no action is needed.
     agent: background_researcher
 
+  # Article Fetch
+  - name: article_fetch
+    description: >
+      Fetch the full contents of a specific paper or article from a url or arxiv
+      ID.
+    expected_output: >
+      Return the full markdown representation of a document
+    agent: background_researcher
+
   # Convert Document
   - name: convert_document
     description: >
@@ -95,6 +136,9 @@ tools:
     docling:
       command: uvx
       args:
+        - --quiet
+        - --no-progress
+        - --color=never
         - --from
         - docling-mcp@1.2.0
         - docling-mcp-server
@@ -106,6 +150,9 @@ tools:
     arxiv:
       command: uvx
       args:
+        - --quiet
+        - --no-progress
+        - --color=never
         - arxiv-mcp-server
         - --storage-path
         # TODO: Make this configurable?
