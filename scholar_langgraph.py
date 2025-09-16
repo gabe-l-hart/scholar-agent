@@ -21,6 +21,7 @@ from humanfriendly.terminal import ansi_wrap
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -428,7 +429,8 @@ class ScholarAgentSession:
         # Get tools from all active sessions
         tools = [
             tool
-            for tool in await self.mcp_client.get_tools()
+            for session in self._mcp_sessions
+            for tool in await (load_mcp_tools(session))
             if tool.name in self.tool_names
         ]
         self._workflow = create_scholar_workflow(self.model, tools)
