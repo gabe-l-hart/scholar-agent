@@ -201,14 +201,14 @@ def faint(text: str) -> str:
 ## Agents ######################################################################
 
 
-def create_supervisor_agent(model):
+def create_supervisor_agent(model, thinking):
     def supervisor_node(state: ScholarState):
         messages = state["agent_messages"][Agents.SUPERVISOR.value]
 
         # Give the supervisor the summary of the current state
         messages.append(HumanMessage(content=state_summary(state)))
 
-        response = model.invoke(messages)
+        response = model.invoke(messages, think=thinking)
         state["agent_messages"][Agents.SUPERVISOR.value].append(response)
 
         try:
@@ -337,8 +337,8 @@ def create_background_researcher_agent(model, tools):
     return researcher_node
 
 
-def create_scholar_workflow(model, tools):
-    supervisor_agent = create_supervisor_agent(model)
+def create_scholar_workflow(model, tools, supervisor_thinking):
+    supervisor_agent = create_supervisor_agent(model, thinking=supervisor_thinking)
     document_ingestion_agent = create_document_ingestion_agent(model, tools)
     article_analyzer_agent = create_article_analyzer_agent(model, tools)
     background_researcher_agent = create_background_researcher_agent(model, tools)
@@ -375,6 +375,7 @@ class ScholarAgentSession:
     mcp_client: MultiServerMCPClient
     tool_names: list[str]
     node_callbacks: list[Callable[[str, StateGraph], None]]
+    supervisor_thinking: bool
 
     # Private
     _workflow: CompiledStateGraph | None
@@ -387,6 +388,7 @@ class ScholarAgentSession:
         mcp_config: dict,
         tool_names: list[str],
         node_callbacks: list[Callable[[str, StateGraph], None]] | None = None,
+        supervisor_thinking: bool = False,
     ):
         self.uuid = str(uuid.uuid4())
         self.model = model
@@ -400,6 +402,7 @@ class ScholarAgentSession:
         self.mcp_client = MultiServerMCPClient(mcp_config)
         self.tool_names = tool_names
         self.node_callbacks = node_callbacks or []
+        self.supervisor_thinking = supervisor_thinking
 
         # Initialize message sequences for all agents
         for agent_type in Agents:
@@ -435,7 +438,9 @@ class ScholarAgentSession:
             for tool in await (load_mcp_tools(session))
             if tool.name in self.tool_names
         ]
-        self._workflow = create_scholar_workflow(self.model, tools)
+        self._workflow = create_scholar_workflow(
+            self.model, tools, self.supervisor_thinking
+        )
 
     async def __aenter__(self):
         """Enter the async context manager"""
@@ -552,6 +557,12 @@ async def main():
         action="store_true",
         help="Automatically exit after processing all provided prompts",
     )
+    parser.add_argument(
+        "--supervisor-thinking",
+        "-t",
+        action="store_true",
+        help="Use thinking for the supervisor",
+    )
     args = parser.parse_args()
 
     # Set up the model
@@ -568,7 +579,13 @@ async def main():
         mcp_config["arxiv"]["args"][-1] = paper_storage
 
         cb = NodeCallback()
-        agent = ScholarAgentSession(model, mcp_config, tool_names, [cb])
+        agent = ScholarAgentSession(
+            model=model,
+            mcp_config=mcp_config,
+            tool_names=tool_names,
+            node_callbacks=[cb],
+            supervisor_thinking=args.supervisor_thinking,
+        )
         async with agent:
 
             # Get pre-scripted prompts
