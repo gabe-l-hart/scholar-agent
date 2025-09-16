@@ -6,14 +6,13 @@ This agent implements a scholarly research assistant using langgraph
 from contextlib import contextmanager
 from enum import Enum
 from types import TracebackType
-from typing import Any, Generator
+from typing import Any, Callable, Generator
 import argparse
 import asyncio
 import json
 import os
 import re
 import tempfile
-import traceback
 import uuid
 
 # Third Party
@@ -375,6 +374,7 @@ class ScholarAgentSession:
     model: BaseChatModel
     mcp_client: MultiServerMCPClient
     tool_names: list[str]
+    node_callbacks: list[Callable[[str, StateGraph], None]]
 
     # Private
     _workflow: CompiledStateGraph | None
@@ -386,6 +386,7 @@ class ScholarAgentSession:
         model: BaseChatModel,
         mcp_config: dict,
         tool_names: list[str],
+        node_callbacks: list[Callable[[str, StateGraph], None]] | None = None,
     ):
         self.uuid = str(uuid.uuid4())
         self.model = model
@@ -398,6 +399,7 @@ class ScholarAgentSession:
         )
         self.mcp_client = MultiServerMCPClient(mcp_config)
         self.tool_names = tool_names
+        self.node_callbacks = node_callbacks or []
 
         # Initialize message sequences for all agents
         for agent_type in Agents:
@@ -441,10 +443,14 @@ class ScholarAgentSession:
 
     async def stop(self, *args, **kwargs):
         """Stop the agent session by cleaning up MCP sessions"""
-        # Clean up MCP sessions
-        for session in self._mcp_sessions:
-            await session.__aexit__(*args, **kwargs)
-        self._mcp_sessions.clear()
+        for cm in self._mcp_session_cms:
+            # Calling __aexit__ on the contextmanager will raise a RuntimeError
+            # because it's being done outside the scope it was created in, but
+            # it will still successfully shut down the connection.
+            try:
+                await cm.__aexit__(*args, **kwargs)
+            except RuntimeError:
+                pass
 
     async def __aexit__(
         self,
@@ -470,12 +476,37 @@ class ScholarAgentSession:
 
         async for step in self._workflow.astream(self.state):
             for node_name, node_output in step.items():
+                for callback in self.node_callbacks:
+                    callback(node_name, node_output)
                 if node_name == "__end__":
                     break
                 self.state.update(node_output)
 
 
 ## Main ########################################################################
+
+
+class NodeCallback:
+    def __init__(self, truncate_responses: int | None = None):
+        self.truncate_responses = truncate_responses
+        self.printed_idxs = {}
+
+    def __call__(self, agent_name: str, state: ScholarState):
+        last_printed_idx = self.printed_idxs.setdefault(agent_name, 0)
+        agent_messages = state["agent_messages"][agent_name]
+        new_messages = agent_messages[last_printed_idx:]
+        self.printed_idxs[agent_name] = len(agent_messages) - 1
+        if new_messages:
+            print(f"{magenta(f'[{agent_name.upper()}]')}")
+            response_color = yellow if agent_name == Agents.SUPERVISOR.value else faint
+            for msg in new_messages:
+                if tool_calls := getattr(msg, "tool_calls", None):
+                    print(magenta(f"TOOL CALL: {tool_calls}"))
+                if content := getattr(msg, "content", None):
+                    response_trunc = content
+                    if self.truncate_responses:
+                        response_trunc = response_trunc[: self.truncate_responses]
+                    print(response_color(f"RESPONSE: {response_trunc}"))
 
 
 async def main():
@@ -536,7 +567,8 @@ async def main():
         os.makedirs(paper_storage, exist_ok=True)
         mcp_config["arxiv"]["args"][-1] = paper_storage
 
-        agent = ScholarAgentSession(model, mcp_config, tool_names)
+        cb = NodeCallback()
+        agent = ScholarAgentSession(model, mcp_config, tool_names, [cb])
         async with agent:
 
             # Get pre-scripted prompts
@@ -559,107 +591,7 @@ async def main():
                     if user_input == "exit":
                         break
 
-                # DEBUG
-                breakpoint()
-
                 await agent.user_input(user_input)
-                # DEBUG
-                print(
-                    yellow(
-                        agent.state["agent_messages"][Agents.SUPERVISOR.value][
-                            -1
-                        ].content
-                    )
-                )
-
-        # # Set up MCP client
-        # mcp_client = MultiServerMCPClient(mcp_config)
-
-        # async with (
-        #     mcp_client.session("docling") as docling_session,
-        #     mcp_client.session("arxiv") as arxiv_session,
-        # ):
-        #     # tools = await load_mcp_tools(docling_session) + await load_mcp_tools(
-        #     #     arxiv_session
-        #     # )
-        #     tools = await mcp_client.get_tools()
-        #     tools = [tool for tool in tools if tool.name in tool_names]
-        #     workflow = create_scholar_workflow(model, tools)
-
-        #     #DEBUG
-        #     breakpoint()
-
-        #     # Initialize the state
-        #     state = ScholarState(
-        #         agent_messages={},
-        #         current_document="",
-        #         background_topics=[],
-        #         next_agent="",
-        #         prev_agent="",
-        #     )
-        #     for agent_type in Agents:
-        #         state["agent_messages"][agent_type.value] = []
-
-        #     # Initialize the supervisor's message sequence
-        #     supervisor_messages = state["agent_messages"][Agents.SUPERVISOR.value]
-        #     supervisor_messages.append(SystemMessage(content=supervisor_prompt))
-
-        #     # Get pre-scripted prompts
-        #     prompts = args.prompt or []
-        #     turn_idx = -1
-
-        #     while True:
-        #         turn_idx += 1
-        #         if turn_idx < len(prompts):
-        #             user_input = prompts[turn_idx]
-        #             print(blue("Prompt: ") + user_input)
-        #         else:
-        #             # If auto mode is enabled and we've processed all prompts, exit
-        #             if args.auto and prompts:
-        #                 print(blue("Auto mode: ") + "All prompts processed. Exiting.")
-        #                 break
-
-        #             user_input = input(blue("You: "))
-        #             if not user_input.strip():
-        #                 continue
-        #             if user_input == "exit":
-        #                 break
-
-        #         # Add the user message to all agents' history
-        #         user_msg = HumanMessage(content=user_input)
-        #         for agent in Agents:
-        #             state["agent_messages"][agent.value].append(user_msg)
-
-        #         try:
-        #             async for step in workflow.astream(state):
-        #                 for node_name, node_output in step.items():
-        #                     if node_name == "__end__":
-        #                         break
-
-        #                     print(f"{magenta(f'[{node_name.upper()}]')}")
-        #                     response_color = (
-        #                         yellow if node_name == "supervisor" else faint
-        #                     )
-
-        #                     for msg in filter(
-        #                         lambda m: m in state["agent_messages"][node_name],
-        #                         node_output.get("agent_messages", {}).get(
-        #                             node_name, []
-        #                         ),
-        #                     ):
-        #                         content = getattr(msg, "content", None)
-        #                         tool_calls = getattr(msg, "tool_calls", None)
-        #                         if tool_calls:
-        #                             print(magenta(f"TOOL CALL: {msg.tool_calls}"))
-        #                         if content:
-        #                             print(response_color(f"RESPONSE: {content}"))
-
-        #                     state.update(node_output)
-
-        #         except Exception as e:
-        #             print(red(f"Error: {e}"))
-        #             traceback.print_exc()
-        #             continue
 
 
 if __name__ == "__main__":
