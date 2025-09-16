@@ -5,6 +5,7 @@ This agent implements a scholarly research assistant using langgraph
 # Standard
 from contextlib import contextmanager
 from enum import Enum
+from types import TracebackType
 from typing import Any, Generator
 import argparse
 import asyncio
@@ -13,15 +14,18 @@ import os
 import re
 import tempfile
 import traceback
+import uuid
 
 # Third Party
 from humanfriendly.terminal import ansi_wrap
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
+from mcp.client.session import ClientSession as MCPClientSession
 from typing_extensions import TypedDict
 
 ## Prompts and Config ##########################################################
@@ -361,6 +365,114 @@ def create_scholar_workflow(model, tools):
     return workflow.compile()
 
 
+class ScholarAgentSession:
+    """Class encapsulating a session with the scholar agent"""
+
+    # Public
+    uuid: str
+    state: ScholarState
+    model: BaseChatModel
+    mcp_client: MultiServerMCPClient
+    tool_names: list[str]
+
+    # Private
+    _workflow: CompiledStateGraph | None
+    _mcp_session_cms: list  # Context manager references
+    _mcp_sessions: list[MCPClientSession]  # Actual sessions
+
+    def __init__(
+        self,
+        model: BaseChatModel,
+        mcp_config: dict,
+        tool_names: list[str],
+    ):
+        self.uuid = str(uuid.uuid4())
+        self.model = model
+        self.state = ScholarState(
+            agent_messages={},
+            current_document="",
+            background_topics=[],
+            next_agent="",
+            prev_agent="",
+        )
+        self.mcp_client = MultiServerMCPClient(mcp_config)
+        self.tool_names = tool_names
+
+        # Initialize message sequences for all agents
+        for agent_type in Agents:
+            self.state["agent_messages"][agent_type.value] = []
+
+        # Initialize the supervisor's message sequence
+        supervisor_messages = self.state["agent_messages"][Agents.SUPERVISOR.value]
+        supervisor_messages.append(SystemMessage(content=supervisor_prompt))
+
+        # Initialize private members that will be instantiated in start/enter
+        self._workflow = None
+        self._mcp_session_cms = []
+        self._mcp_sessions = []
+
+    async def start(self):
+        """Start the agent session by creating MCP sessions and initializing the workflow"""
+        # Create persistent MCP sessions for each server
+        # NOTE: We need to store references to the contextmanager alongside the
+        #   session to avoid the contextmanager getting exited prematurely when
+        #   the CM gets garbage collected
+        self._mcp_session_cms = [
+            self.mcp_client.session(server_name)
+            for server_name in self.mcp_client.connections
+        ]
+        self._mcp_sessions = await asyncio.gather(
+            *[cm.__aenter__() for cm in self._mcp_session_cms]
+        )
+
+        # Get tools from all active sessions
+        tools = [
+            tool
+            for tool in await self.mcp_client.get_tools()
+            if tool.name in self.tool_names
+        ]
+        self._workflow = create_scholar_workflow(self.model, tools)
+
+    async def __aenter__(self):
+        """Enter the async context manager"""
+        await self.start()
+
+    async def stop(self, *args, **kwargs):
+        """Stop the agent session by cleaning up MCP sessions"""
+        # Clean up MCP sessions
+        for session in self._mcp_sessions:
+            await session.__aexit__(*args, **kwargs)
+        self._mcp_sessions.clear()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool:
+        """Exit the async context manager"""
+        await self.stop(exc_type, exc_val, exc_tb)
+        # Don't suppress exceptions
+        return False
+
+    async def user_input(self, content: str):
+        """Add a user input message to the supervisor and process the result"""
+        if self._workflow is None:
+            raise RuntimeError(
+                "Agent session not started. Call start() or use as async context manager."
+            )
+
+        user_msg = HumanMessage(content=content)
+        for agent in Agents:
+            self.state["agent_messages"][agent.value].append(user_msg)
+
+        async for step in self._workflow.astream(self.state):
+            for node_name, node_output in step.items():
+                if node_name == "__end__":
+                    break
+                self.state.update(node_output)
+
+
 ## Main ########################################################################
 
 
@@ -422,38 +534,12 @@ async def main():
         os.makedirs(paper_storage, exist_ok=True)
         mcp_config["arxiv"]["args"][-1] = paper_storage
 
-        # Set up MCP client
-        mcp_client = MultiServerMCPClient(mcp_config)
-
-        async with (
-            mcp_client.session("docling") as docling_session,
-            mcp_client.session("arxiv") as arxiv_session,
-        ):
-            tools = await load_mcp_tools(docling_session) + await load_mcp_tools(
-                arxiv_session
-            )
-            tools = [tool for tool in tools if tool.name in tool_names]
-            workflow = create_scholar_workflow(model, tools)
-
-            # Initialize the state
-            state = ScholarState(
-                agent_messages={},
-                current_document="",
-                background_topics=[],
-                next_agent="",
-                prev_agent="",
-            )
-            for agent_type in Agents:
-                state["agent_messages"][agent_type.value] = []
-
-            # Initialize the supervisor's message sequence
-            supervisor_messages = state["agent_messages"][Agents.SUPERVISOR.value]
-            supervisor_messages.append(SystemMessage(content=supervisor_prompt))
+        agent = ScholarAgentSession(model, mcp_config, tool_names)
+        async with agent:
 
             # Get pre-scripted prompts
             prompts = args.prompt or []
             turn_idx = -1
-
             while True:
                 turn_idx += 1
                 if turn_idx < len(prompts):
@@ -471,41 +557,107 @@ async def main():
                     if user_input == "exit":
                         break
 
-                # Add the user message to all agents' history
-                user_msg = HumanMessage(content=user_input)
-                for agent in Agents:
-                    state["agent_messages"][agent.value].append(user_msg)
+                # DEBUG
+                breakpoint()
 
-                try:
-                    async for step in workflow.astream(state):
-                        for node_name, node_output in step.items():
-                            if node_name == "__end__":
-                                break
+                await agent.user_input(user_input)
+                # DEBUG
+                print(
+                    yellow(
+                        agent.state["agent_messages"][Agents.SUPERVISOR.value][
+                            -1
+                        ].content
+                    )
+                )
 
-                            print(f"{magenta(f'[{node_name.upper()}]')}")
-                            response_color = (
-                                yellow if node_name == "supervisor" else faint
-                            )
+        # # Set up MCP client
+        # mcp_client = MultiServerMCPClient(mcp_config)
 
-                            for msg in filter(
-                                lambda m: m in state["agent_messages"][node_name],
-                                node_output.get("agent_messages", {}).get(
-                                    node_name, []
-                                ),
-                            ):
-                                content = getattr(msg, "content", None)
-                                tool_calls = getattr(msg, "tool_calls", None)
-                                if tool_calls:
-                                    print(magenta(f"TOOL CALL: {msg.tool_calls}"))
-                                if content:
-                                    print(response_color(f"RESPONSE: {content}"))
+        # async with (
+        #     mcp_client.session("docling") as docling_session,
+        #     mcp_client.session("arxiv") as arxiv_session,
+        # ):
+        #     # tools = await load_mcp_tools(docling_session) + await load_mcp_tools(
+        #     #     arxiv_session
+        #     # )
+        #     tools = await mcp_client.get_tools()
+        #     tools = [tool for tool in tools if tool.name in tool_names]
+        #     workflow = create_scholar_workflow(model, tools)
 
-                            state.update(node_output)
+        #     #DEBUG
+        #     breakpoint()
 
-                except Exception as e:
-                    print(red(f"Error: {e}"))
-                    traceback.print_exc()
-                    continue
+        #     # Initialize the state
+        #     state = ScholarState(
+        #         agent_messages={},
+        #         current_document="",
+        #         background_topics=[],
+        #         next_agent="",
+        #         prev_agent="",
+        #     )
+        #     for agent_type in Agents:
+        #         state["agent_messages"][agent_type.value] = []
+
+        #     # Initialize the supervisor's message sequence
+        #     supervisor_messages = state["agent_messages"][Agents.SUPERVISOR.value]
+        #     supervisor_messages.append(SystemMessage(content=supervisor_prompt))
+
+        #     # Get pre-scripted prompts
+        #     prompts = args.prompt or []
+        #     turn_idx = -1
+
+        #     while True:
+        #         turn_idx += 1
+        #         if turn_idx < len(prompts):
+        #             user_input = prompts[turn_idx]
+        #             print(blue("Prompt: ") + user_input)
+        #         else:
+        #             # If auto mode is enabled and we've processed all prompts, exit
+        #             if args.auto and prompts:
+        #                 print(blue("Auto mode: ") + "All prompts processed. Exiting.")
+        #                 break
+
+        #             user_input = input(blue("You: "))
+        #             if not user_input.strip():
+        #                 continue
+        #             if user_input == "exit":
+        #                 break
+
+        #         # Add the user message to all agents' history
+        #         user_msg = HumanMessage(content=user_input)
+        #         for agent in Agents:
+        #             state["agent_messages"][agent.value].append(user_msg)
+
+        #         try:
+        #             async for step in workflow.astream(state):
+        #                 for node_name, node_output in step.items():
+        #                     if node_name == "__end__":
+        #                         break
+
+        #                     print(f"{magenta(f'[{node_name.upper()}]')}")
+        #                     response_color = (
+        #                         yellow if node_name == "supervisor" else faint
+        #                     )
+
+        #                     for msg in filter(
+        #                         lambda m: m in state["agent_messages"][node_name],
+        #                         node_output.get("agent_messages", {}).get(
+        #                             node_name, []
+        #                         ),
+        #                     ):
+        #                         content = getattr(msg, "content", None)
+        #                         tool_calls = getattr(msg, "tool_calls", None)
+        #                         if tool_calls:
+        #                             print(magenta(f"TOOL CALL: {msg.tool_calls}"))
+        #                         if content:
+        #                             print(response_color(f"RESPONSE: {content}"))
+
+        #                     state.update(node_output)
+
+        #         except Exception as e:
+        #             print(red(f"Error: {e}"))
+        #             traceback.print_exc()
+        #             continue
 
 
 if __name__ == "__main__":
