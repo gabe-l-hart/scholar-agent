@@ -13,6 +13,7 @@ import tempfile
 # Third Party
 from humanfriendly.terminal import ansi_wrap
 from langchain_ollama import ChatOllama
+import alog
 
 # Local
 from scholar_agent import config
@@ -129,7 +130,41 @@ async def main():
         action="store_true",
         help="Use thinking for the supervisor",
     )
+    parser.add_argument(
+        "--log-level",
+        "-l",
+        default=config.log.level,
+        help="Default logging level",
+    )
+    parser.add_argument(
+        "--log-filters",
+        "-lf",
+        default=config.log.filters,
+        help="Per-channel log filters",
+    )
+    parser.add_argument(
+        "--log-json",
+        "-lj",
+        action="store_true",
+        default=config.log.json,
+        help="Use json log formatter",
+    )
+    parser.add_argument(
+        "--log-thread-id",
+        "-lt",
+        action="store_true",
+        default=config.log.thread_id,
+        help="Log the thread ID with each log message",
+    )
     args = parser.parse_args()
+
+    # Configure logging
+    alog.configure(
+        default_level=args.log_level,
+        filters=args.log_filters,
+        formatter="json" if args.log_json else "pretty",
+        thread_id=args.log_thread_id,
+    )
 
     # Set up the model
     if args.model_provider == ModelProvider.OLLAMA:

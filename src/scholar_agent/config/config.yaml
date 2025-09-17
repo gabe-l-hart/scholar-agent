@@ -1,3 +1,9 @@
+log:
+  level: warning
+  filters: ""
+  json: false
+  thread_id: false
+
 model:
   provider: ollama
   config:

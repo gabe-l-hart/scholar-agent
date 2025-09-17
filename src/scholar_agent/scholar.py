@@ -20,9 +20,13 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from mcp.client.session import ClientSession as MCPClientSession
 import aconfig
+import alog
 
 # Local
 from scholar_agent.types import Agents, ScholarState
+
+log = alog.use_channel("SCHLR")
+
 
 ## Helpers #####################################################################
 
@@ -96,6 +100,7 @@ class ScholarAgentSession:
 
     async def start(self):
         """Start the agent session by creating MCP sessions and initializing the workflow"""
+        log.info("[%s] Starting session", self.uuid)
         # Create persistent MCP sessions for each server
         # NOTE: We need to store references to the contextmanager alongside the
         #   session to avoid the contextmanager getting exited prematurely when
@@ -123,6 +128,7 @@ class ScholarAgentSession:
 
     async def stop(self, *args, **kwargs):
         """Stop the agent session by cleaning up MCP sessions"""
+        log.info("[%s] Stopping session", self.uuid)
         for cm in self._mcp_session_cms:
             # Calling __aexit__ on the contextmanager will raise a RuntimeError
             # because it's being done outside the scope it was created in, but
@@ -156,11 +162,17 @@ class ScholarAgentSession:
         for agent in Agents:
             self.state["agent_messages"][agent.value].append(user_msg)
 
+        log.debug("[%s] Processing user input", self.uuid)
+        log.debug2("[%s] %s", self.uuid, user_msg)
         async for step in self._workflow.astream(self.state):
             for node_name, node_output in step.items():
+                log.debug("[%s] Processing agent output: %s", self.uuid, node_name)
+                log.debug("[%s] %s", self.uuid, node_output)
+                log.debug("")
                 for callback in self.node_callbacks:
                     callback(node_name, node_output)
                 if node_name == "__end__":
+                    log.debug("[%s] Processing complete", self.uuid)
                     break
                 self.state.update(node_output)
 
