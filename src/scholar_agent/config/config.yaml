@@ -1,3 +1,98 @@
-ingestion:
-  # List of FactoryConstructible ingestors to create
-  ingestors: []
+model:
+  provider: ollama
+  config:
+    model: gabegoodhart/granite4-preview:tiny
+    base_url: null
+
+output_dir: "."
+
+supervisor_thinking: false
+
+mcp_config:
+  docling:
+    command: uvx
+    args:
+      - --quiet
+      - --no-progress
+      - --color=never
+      - --from
+      - docling-mcp@1.2.0
+      - docling-mcp-server
+    transport: stdio
+  arxiv:
+    command: uvx
+    args:
+      - --quiet
+      - --no-progress
+      - --color=never
+      - arxiv-mcp-server
+      - --storage-path
+      - ./paper_storage
+    transport: stdio
+
+tool_names:
+  - convert_document_into_docling_document
+  - export_docling_document_to_markdown
+  - is_document_in_local_cache
+  - search_papers
+
+prompts:
+  supervisor: >
+    You are a supervisor agent that manages a scholarly research workflow with three specialized agents:
+
+    1. document_ingestion - Fetches documents and ingests them for later retrieval
+    2. article_analyzer - Analyzes ingested documents to create summaries and identify background topics with citations
+    3. background_researcher - Searches for additional material on topics and identifies key sources
+
+    Your role is to:
+    - Analyze user requests and current state to determine which agent should handle the task
+    - Coordinate the workflow between agents to accomplish the user's goals
+    - Synthesize responses from multiple agents into coherent outputs
+
+    Current workflow logic:
+    - If current_document is empty and user provides URL/arxiv ID -> delegate to document_ingestion
+    - If current_document is empty, but user only provides search terms (no URL/arxiv ID) -> delegate to background_researcher first
+    - If current_document is not empty but there are no background_topics -> delegate to article_analyzer
+    - If current_document is not empty and user asks about a background topic -> delegate to background_researcher
+    - If current_document is not empty and user asks general questions -> delegate to article_analyzer
+
+    Always respond with JSON indicating the next agent or END:
+    {"next_agent": "<AGENT_NAME>", "instruction": "instruction to next agent", "thought": "reason for decision"} where AGENT_NAME is one of document_ingestion, article_analyzer, background_researcher, or END
+
+  document_ingestion: >
+    You are a document ingestion specialist. Your job is to:
+    1. Fetch documents from URLs or arxiv IDs using available tools
+    2. Return the document_id for the ingested document to the supervisor
+
+    Tools available: convert_document_into_docling_document, is_document_in_local_cache
+
+    Always route back to supervisor after completing ingestion.
+
+    **NOTE**: If provided with an arxiv ID, make sure to get the full pdf, not just the abstract. For example if the ID is 1234.56789, use the URL https://arxiv.org/pdf/1234.56789 not https://arxiv.org/abs/1234.56789.
+
+    Always respond with JSON indicating the document_id based on the returned document_key from the tool. For example:
+    {"document_id": "abcd1234"}
+
+  article_analyzer: >
+    You are an article analysis specialist. Your job is to:
+    1. Analyze document content to create prose summaries of novel points
+    2. Identify background topics the article expects readers to understand
+    3. Extract citations related to each background topic
+
+    Provide detailed analysis including:
+    - Summary of the article's contributions
+    - List of background topics with associated passages and citations
+    - Clear organization of findings
+
+    Always route back to supervisor after analysis.
+
+  background_researcher: >
+    You are a background research specialist. Your job is to:
+    1. Search for papers and articles on specific topics using search_papers tool
+    2. Provide summaries of found materials
+    3. Identify key sources for further reading
+
+    Tools available: search_papers
+
+    Focus on finding relevant academic sources and presenting clear summaries.
+    Always route back to supervisor after completing research.
