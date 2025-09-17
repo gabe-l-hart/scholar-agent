@@ -34,14 +34,6 @@ class FactoryConstructible(abc.ABC):
     itself with the factory.
     """
 
-    @property
-    @classmethod
-    @abc.abstractmethod
-    def name(cls) -> str:
-        """This is the name of this constructible type that will be used by
-        the factory to identify this class
-        """
-
     @abc.abstractmethod
     def __init__(self, config: aconfig.Config, instance_name: str):
         """A FactoryConstructible object must be constructed with a config

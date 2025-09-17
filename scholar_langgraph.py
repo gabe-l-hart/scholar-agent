@@ -12,13 +12,13 @@ import tempfile
 
 # Third Party
 from humanfriendly.terminal import ansi_wrap
-from langchain_ollama import ChatOllama
 import alog
 
 # Local
 from scholar_agent import config
 from scholar_agent.scholar import ScholarAgentSession
 from scholar_agent.types import Agents, ModelProvider, ScholarState
+from scholar_agent.utils.models import model_factory
 
 ## Helpers #####################################################################
 
@@ -88,14 +88,14 @@ async def main():
         "--model",
         "-m",
         type=str,
-        default="gabegoodhart/granite4-preview:tiny",
+        default=config.model.config.model,
         help="The model to use for the agent",
     )
     parser.add_argument(
         "--model-provider",
         "-mp",
         choices=ModelProvider,
-        default=ModelProvider.OLLAMA,
+        default=config.model.type,
         help="The provider to use for the model",
     )
     parser.add_argument(
@@ -167,10 +167,7 @@ async def main():
     )
 
     # Set up the model
-    if args.model_provider == ModelProvider.OLLAMA:
-        model = ChatOllama(model=args.model, base_url=args.ollama_host)
-    else:
-        raise ValueError(f"Unsupported model provider: {args.model_provider}")
+    model = model_factory.construct(config.model)
 
     with ensure_workdir(args.output_dir) as workdir:
 

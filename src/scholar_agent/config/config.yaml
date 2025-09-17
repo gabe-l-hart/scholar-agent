@@ -5,7 +5,7 @@ log:
   thread_id: false
 
 model:
-  provider: ollama
+  type: ollama
   config:
     model: gabegoodhart/granite4-preview:tiny
     base_url: null
