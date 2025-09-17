@@ -10,14 +10,6 @@ from langchain_core.messages import BaseMessage
 from typing_extensions import TypedDict
 
 
-class ScholarState(TypedDict):
-    agent_messages: dict[str, list[BaseMessage]]
-    current_document: str
-    background_topics: list
-    next_agent: str
-    prev_agent: str
-
-
 class Agents(Enum):
     SUPERVISOR = "supervisor"
     DOCUMENT_INGESTION = "document_ingestion"
@@ -27,3 +19,46 @@ class Agents(Enum):
 
 class ModelProvider(Enum):
     OLLAMA = "ollama"
+
+
+## State Types ##
+
+
+class BackgroundTopic(TypedDict):
+    """A single background topic and known information about it"""
+
+    description: str
+    articles: list[str]
+    passages: list[str]
+
+
+class ScholarState(TypedDict):
+    """The state of the Scholar session seen by the user between turns"""
+
+    document_id: str
+    document_summary: str
+    background_topics: list[BackgroundTopic]
+
+
+class ScholarStateInternal(ScholarState):
+    """The state of the Scholar session used by the agents between steps"""
+
+    agent_messages: dict[str, list[BaseMessage]]
+    next_agent: str
+    prev_agent: str
+
+
+## Agent Response Types ##
+
+
+class DocumentIngestionOutput(TypedDict):
+    document_id: str
+
+
+class ArticleAnalyzerOutput(TypedDict):
+    document_summary: str
+    background_topics: list[BackgroundTopic]
+
+
+class BackgroundResearcherOutput(TypedDict):
+    background_topics: list[BackgroundTopic]

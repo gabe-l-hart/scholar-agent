@@ -8,6 +8,7 @@ from typing import Any, Generator
 import argparse
 import asyncio
 import os
+import shutil
 import tempfile
 
 # Third Party
@@ -17,7 +18,7 @@ import alog
 # Local
 from scholar_agent import config
 from scholar_agent.scholar import ScholarAgentSession
-from scholar_agent.types import Agents, ModelProvider, ScholarState
+from scholar_agent.types import Agents, ModelProvider, ScholarStateInternal
 from scholar_agent.utils.models import model_factory
 
 ## Helpers #####################################################################
@@ -63,22 +64,26 @@ class NodeCallback:
         self.truncate_responses = truncate_responses
         self.printed_idxs = {}
 
-    def __call__(self, agent_name: str, state: ScholarState):
+    def __call__(self, agent_name: str, state: ScholarStateInternal):
         last_printed_idx = self.printed_idxs.setdefault(agent_name, 0)
         agent_messages = state["agent_messages"][agent_name]
         new_messages = agent_messages[last_printed_idx:]
         self.printed_idxs[agent_name] = len(agent_messages) - 1
         if new_messages:
             print(f"{magenta(f'[{agent_name.upper()}]')}")
-            response_color = yellow if agent_name == Agents.SUPERVISOR.value else faint
             for msg in new_messages:
                 if tool_calls := getattr(msg, "tool_calls", None):
                     print(magenta(f"TOOL CALL: {tool_calls}"))
                 if content := getattr(msg, "content", None):
                     response_trunc = content
-                    if self.truncate_responses:
-                        response_trunc = response_trunc[: self.truncate_responses]
-                    print(response_color(f"RESPONSE: {response_trunc}"))
+                    if (
+                        self.truncate_responses
+                        and len(content) > self.truncate_responses
+                    ):
+                        response_trunc = (
+                            response_trunc[: self.truncate_responses - 3] + "..."
+                        )
+                    print(faint(f"RESPONSE: {response_trunc}"))
 
 
 async def main():
@@ -156,6 +161,13 @@ async def main():
         default=config.log.thread_id,
         help="Log the thread ID with each log message",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        default=0,
+        action="count",
+        help="Print full agent step responses",
+    )
     args = parser.parse_args()
 
     # Configure logging
@@ -165,6 +177,12 @@ async def main():
         formatter="json" if args.log_json else "pretty",
         thread_id=args.log_thread_id,
     )
+
+    # Update config from flags
+    config._config.supervisor_thinking = args.supervisor_thinking
+    config._config.model.type = args.model_provider
+    config._config.model.config.model = args.model
+    config._config.model.config.base_url = args.ollama_host
 
     # Set up the model
     model = model_factory.construct(config.model)
@@ -176,11 +194,17 @@ async def main():
         os.makedirs(paper_storage, exist_ok=True)
         config.mcp_config["arxiv"]["args"][-1] = paper_storage
 
-        cb = NodeCallback()
+        callbacks = []
+        if args.verbose == 1:
+            callbacks.append(
+                NodeCallback(truncate_responses=shutil.get_terminal_size().columns)
+            )
+        elif args.verbose > 1:
+            callbacks.append(NodeCallback())
         agent = ScholarAgentSession(
             model=model,
-            config=config,
-            node_callbacks=[cb],
+            config=config._config,
+            node_callbacks=callbacks,
         )
         async with agent:
 
@@ -204,7 +228,18 @@ async def main():
                     if user_input == "exit":
                         break
 
-                await agent.user_input(user_input)
+                end_state = await agent.user_input(user_input)
+                print(magenta("SCHOLAR:"))
+                print(yellow("**Summary:**"))
+                print(yellow(end_state["document_summary"]))
+                if background_topics := end_state["background_topics"]:
+                    print()
+                    print(yellow("**Background Topics**:"))
+                    for topic in background_topics:
+                        print(yellow("- " + topic["description"]))
+                        if articles := topic["articles"]:
+                            for article in articles:
+                                print(yellow(f"  - {article}"))
 
 
 if __name__ == "__main__":
