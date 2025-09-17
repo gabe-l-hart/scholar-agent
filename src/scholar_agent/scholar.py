@@ -7,7 +7,6 @@ from types import TracebackType
 from typing import Callable
 import asyncio
 import json
-import re
 import uuid
 
 # Third Party
@@ -23,27 +22,16 @@ import aconfig
 import alog
 
 # Local
-from scholar_agent.types import Agents, ScholarState
+from scholar_agent.types import (
+    Agents,
+    ArticleAnalyzerOutput,
+    BackgroundResearcherOutput,
+    DocumentIngestionOutput,
+    ScholarState,
+    ScholarStateInternal,
+)
 
 log = alog.use_channel("SCHLR")
-
-
-## Helpers #####################################################################
-
-
-def state_summary(state: ScholarState) -> str:
-    summary = {
-        "current_document": state["current_document"],
-        "background_topics": state["background_topics"],
-        "prev_agent": state["prev_agent"],
-        "prev_agent_response": "",
-    }
-    if prev_agent_messages := state["agent_messages"].get(state["prev_agent"]):
-        summary["prev_agent_response"] = prev_agent_messages[-1].content
-    return json.dumps(summary, indent=2)
-
-
-## Agents ######################################################################
 
 
 class ScholarAgentSession:
@@ -51,7 +39,7 @@ class ScholarAgentSession:
 
     # Public
     uuid: str
-    state: ScholarState
+    state: ScholarStateInternal
     model: BaseChatModel
     mcp_client: MultiServerMCPClient
     tool_names: list[str]
@@ -72,9 +60,10 @@ class ScholarAgentSession:
         self.uuid = str(uuid.uuid4())
         self.model = model
         self.config = config
-        self.state = ScholarState(
+        self.state = ScholarStateInternal(
             agent_messages={},
-            current_document="",
+            document_id="",
+            document_summary="",
             background_topics=[],
             next_agent="",
             prev_agent="",
@@ -151,7 +140,7 @@ class ScholarAgentSession:
 
     ## Public API ##
 
-    async def user_input(self, content: str):
+    async def user_input(self, content: str) -> ScholarState:
         """Add a user input message to the supervisor and process the result"""
         if self._workflow is None:
             raise RuntimeError(
@@ -176,7 +165,25 @@ class ScholarAgentSession:
                     break
                 self.state.update(node_output)
 
+        return ScholarState(
+            document_id=self.state["document_id"],
+            document_summary=self.state["document_summary"],
+            background_topics=self.state["background_topics"],
+        )
+
     ## Implementation Details ##
+
+    @staticmethod
+    def _state_summary(state: ScholarStateInternal) -> str:
+        summary = {
+            "document_id": state["document_id"],
+            "background_topics": state["background_topics"],
+            "prev_agent": state["prev_agent"],
+            "prev_agent_response": "",
+        }
+        if prev_agent_messages := state["agent_messages"].get(state["prev_agent"]):
+            summary["prev_agent_response"] = prev_agent_messages[-1].content
+        return json.dumps(summary, indent=2)
 
     def _create_scholar_workflow(self, tools):
         supervisor_agent = self._create_supervisor_agent()
@@ -184,13 +191,13 @@ class ScholarAgentSession:
         article_analyzer_agent = self._create_article_analyzer_agent(tools)
         background_researcher_agent = self._create_background_researcher_agent(tools)
 
-        def route_after_supervisor(state: ScholarState):
+        def route_after_supervisor(state: ScholarStateInternal):
             next_agent = state.get("next_agent", "END")
             if next_agent == "END":
                 return END
             return next_agent
 
-        workflow = StateGraph(ScholarState)
+        workflow = StateGraph(ScholarStateInternal)
 
         workflow.add_node(Agents.SUPERVISOR.value, supervisor_agent)
         workflow.add_node(Agents.DOCUMENT_INGESTION.value, document_ingestion_agent)
@@ -208,12 +215,11 @@ class ScholarAgentSession:
         return workflow.compile()
 
     def _create_supervisor_agent(self):
-        def supervisor_node(state: ScholarState):
+        def supervisor_node(state: ScholarStateInternal):
             messages = state["agent_messages"][Agents.SUPERVISOR.value]
 
             # Give the supervisor the summary of the current state
-            messages.append(HumanMessage(content=state_summary(state)))
-
+            messages.append(HumanMessage(content=self._state_summary(state)))
             response = self.model.invoke(
                 messages, think=self.config.supervisor_thinking
             )
@@ -254,43 +260,22 @@ class ScholarAgentSession:
             self.model,
             ingestion_tools,
             prompt=self.config.prompts.document_ingestion,
+            response_format=DocumentIngestionOutput,
         )
 
-        async def ingestion_node(state: ScholarState):
+        async def ingestion_node(state: ScholarStateInternal):
             messages = state["agent_messages"][Agents.DOCUMENT_INGESTION.value]
-            document_id = None
 
             async for resp in agent.astream(
                 input={"messages": messages}, stream_mode="updates"
             ):
-                if agent_response := resp.get("agent"):
-                    new_messages = agent_response["messages"]
-                elif tool_response := resp.get("tools"):
-                    new_messages = tool_response["messages"]
-                else:
-                    continue
-
-                for msg in new_messages:
-                    messages.append(msg)
-                    if "document_key" in msg.content:
-
-                        # Try parsing json first
-                        try:
-                            parsed = json.loads(msg.content)
-                            document_id = parsed.get("document_key")
-
-                        # Fall back to regex matching
-                        except json.decoder.JSONDecodeError:
-                            if id_match := re.search(
-                                r'document_key["\s:]+([^"\s,}]+)',
-                                msg.content,
-                                re.IGNORECASE,
-                            ):
-                                document_id = id_match.group(1)
-
-            # Store the document reference in the state
-            if document_id:
-                state["current_document"] = document_id
+                messages.extend(resp.get("agent", {}).get("messages", []))
+                messages.extend(resp.get("tools", {}).get("messages", []))
+                state.update(
+                    resp.get("generate_structured_response", {}).get(
+                        "structured_response", {}
+                    )
+                )
 
             state["agent_messages"][Agents.DOCUMENT_INGESTION.value] = messages
             state["next_agent"] = Agents.SUPERVISOR.value
@@ -307,11 +292,12 @@ class ScholarAgentSession:
             self.model,
             analyzer_tools,
             prompt=self.config.prompts.article_analyzer,
+            response_format=ArticleAnalyzerOutput,
         )
 
-        async def analyzer_node(state: ScholarState):
+        async def analyzer_node(state: ScholarStateInternal):
             messages = state["agent_messages"][Agents.ARTICLE_ANALYZER.value]
-            current_doc = state["current_document"]
+            current_doc = state["document_id"]
             if not current_doc:
                 response = AIMessage("No document available for analysis")
                 messages.append(response)
@@ -324,6 +310,11 @@ class ScholarAgentSession:
                 ):
                     messages.extend(resp.get("agent", {}).get("messages", []))
                     messages.extend(resp.get("tools", {}).get("messages", []))
+                    state.update(
+                        resp.get("generate_structured_response", {}).get(
+                            "structured_response", {}
+                        )
+                    )
 
                 state["agent_messages"][Agents.ARTICLE_ANALYZER.value] = messages
 
@@ -339,15 +330,21 @@ class ScholarAgentSession:
             self.model,
             research_tools,
             prompt=self.config.prompts.background_researcher,
+            response_format=BackgroundResearcherOutput,
         )
 
-        async def researcher_node(state: ScholarState):
+        async def researcher_node(state: ScholarStateInternal):
             messages = state["agent_messages"][Agents.BACKGROUND_RESEARCHER.value]
             async for resp in agent.astream(
                 input={"messages": messages}, stream_mode="updates"
             ):
                 messages.extend(resp.get("agent", {}).get("messages", []))
                 messages.extend(resp.get("tools", {}).get("messages", []))
+                state.update(
+                    resp.get("generate_structured_response", {}).get(
+                        "structured_response", {}
+                    )
+                )
 
             state["agent_messages"][Agents.BACKGROUND_RESEARCHER.value] = messages
             state["next_agent"] = Agents.SUPERVISOR.value

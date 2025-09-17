@@ -8,6 +8,7 @@ from typing import Any, Generator
 import argparse
 import asyncio
 import os
+import shutil
 import tempfile
 
 # Third Party
@@ -17,7 +18,7 @@ import alog
 # Local
 from scholar_agent import config
 from scholar_agent.scholar import ScholarAgentSession
-from scholar_agent.types import Agents, ModelProvider, ScholarState
+from scholar_agent.types import Agents, ModelProvider, ScholarStateInternal
 from scholar_agent.utils.models import model_factory
 
 ## Helpers #####################################################################
@@ -63,7 +64,7 @@ class NodeCallback:
         self.truncate_responses = truncate_responses
         self.printed_idxs = {}
 
-    def __call__(self, agent_name: str, state: ScholarState):
+    def __call__(self, agent_name: str, state: ScholarStateInternal):
         last_printed_idx = self.printed_idxs.setdefault(agent_name, 0)
         agent_messages = state["agent_messages"][agent_name]
         new_messages = agent_messages[last_printed_idx:]
@@ -165,6 +166,12 @@ async def main():
         formatter="json" if args.log_json else "pretty",
         thread_id=args.log_thread_id,
     )
+
+    # Update config from flags
+    config._config.supervisor_thinking = args.supervisor_thinking
+    config._config.model.type = args.model_provider
+    config._config.model.config.model = args.model
+    config._config.model.config.base_url = args.ollama_host
 
     # Set up the model
     model = model_factory.construct(config.model)
