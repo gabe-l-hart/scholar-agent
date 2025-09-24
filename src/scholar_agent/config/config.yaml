@@ -9,8 +9,19 @@ model:
   config:
     model: gabegoodhart/granite4-preview:tiny
     base_url: null
+    num_ctx: 131072
 
 output_dir: "."
+
+server:
+  port: 9009
+  host: "0.0.0.0"
+  tls_cert_path: null
+  tls_key_path: null
+  client_ca_cert_path: null
+  session_header: "X-Scholar-Session-ID"
+  enable_auth: false
+  enable_cors: false
 
 supervisor_thinking: false
 
