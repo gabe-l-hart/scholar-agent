@@ -42,6 +42,7 @@ scholar-agent = "scholar_agent.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"scholar_agent.config" = ["config.yaml"]
 
 [tool.setuptools_scm]
 version_file = "src/scholar_agent/_version.py"
