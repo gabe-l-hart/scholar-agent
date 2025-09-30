@@ -32,6 +32,9 @@ dev = [
 
 ## build #######################################################################
 
+[project.scripts]
+scholar-agent = "scholar_agent.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
