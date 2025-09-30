@@ -10,6 +10,7 @@ model:
     model: gabegoodhart/granite4-preview:tiny
     base_url: null
     num_ctx: 131072
+    temperature: 0.0
 
 output_dir: "."
 
