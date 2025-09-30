@@ -9,6 +9,7 @@ model:
   config:
     model: gabegoodhart/granite4-preview:tiny
     base_url: null
+    num_ctx: 131072
 
 output_dir: "."
 
