@@ -11,7 +11,6 @@ This project is a work in progress! This readme in particular is extremely minim
 **prereqs**: Make sure you have Ollama installed and your preferred model installed (default: `gabegoodhart/granite4-preview:tiny`)
 
 ```sh
-git clone git@github.com:gabe-l-hart/scholar-agent.git && cd scholar-agent
-pip install -e .
-python scholar_langraph.py
+pip install git+https://github.com/gabe-l-hart/scholar-agent.git
+scholar-agent
 ```
