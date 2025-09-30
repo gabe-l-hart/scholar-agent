@@ -14,7 +14,10 @@ dependencies = [
     "alchemy-config>=0.6.0",
     "fastapi>=0.116.1",
     "uvicorn>=0.35.0",
-    "crewai>=0.175.0",
+    "langchain-ollama>=0.3.7",
+    "langchain-mcp-adapters>=0.1.9",
+    "humanfriendly>=10.0",
+    "langgraph>=0.6.7"
 ]
 
 [build-system]
