@@ -18,7 +18,7 @@ import alog
 # Local
 from scholar_agent import config
 from scholar_agent.scholar import ScholarAgentSession
-from scholar_agent.types import Agents, ModelProvider, ScholarStateInternal
+from scholar_agent.types import ModelProvider, ScholarStateInternal
 from scholar_agent.utils.models import model_factory
 
 ## Helpers #####################################################################
@@ -86,7 +86,7 @@ class NodeCallback:
                     print(faint(f"RESPONSE: {response_trunc}"))
 
 
-async def main():
+async def amain():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -242,5 +242,9 @@ async def main():
                                 print(yellow(f"  - {article}"))
 
 
+def main():
+    asyncio.run(amain())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
