@@ -7,7 +7,7 @@ log:
 model:
   type: ollama
   config:
-    model: gabegoodhart/granite4-preview:tiny
+    model: granite4:micro-h
     base_url: null
     num_ctx: 131072
     temperature: 0.0
